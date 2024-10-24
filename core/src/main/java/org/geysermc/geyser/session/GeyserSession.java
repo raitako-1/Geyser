@@ -962,8 +962,6 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
         // Start ticking
         tickThread = eventLoop.scheduleAtFixedRate(this::tick, 50, 50, TimeUnit.MILLISECONDS);
 
-        this.protocol.setUseDefaultListeners(false);
-
         TcpSession downstream;
         if (geyser.getBootstrap().getSocketAddress() != null) {
             // We're going to connect through the JVM and not through TCP
@@ -989,7 +987,6 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
         this.downstream.getSession().setFlag(MinecraftConstants.FOLLOW_TRANSFERS, false);
 
         if (geyser.getConfig().getRemote().isUseProxyProtocol()) {
-            downstream.setFlag(BuiltinFlags.ENABLE_CLIENT_PROXY_PROTOCOL, true);
             downstream.setFlag(BuiltinFlags.CLIENT_PROXIED_ADDRESS, upstream.getAddress());
         }
         if (geyser.getConfig().isForwardPlayerPing()) {
@@ -998,22 +995,6 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
         }
         // We'll handle this since we have the registry data on hand
         downstream.setFlag(MinecraftConstants.SEND_BLANK_KNOWN_PACKS_RESPONSE, false);
-
-        // This isn't a great solution, but... we want to make sure the finish configuration packet cannot be sent
-        // before the KnownPacks packet.
-        this.downstream.getSession().addListener(new ClientListener(ProtocolState.LOGIN, loginEvent.transferring()) {
-            @Override
-            public void packetReceived(Session session, Packet packet) {
-                if (protocol.getState() == ProtocolState.CONFIGURATION) {
-                    if (packet instanceof ClientboundFinishConfigurationPacket) {
-                        // Prevent
-                        GeyserSession.this.ensureInEventLoop(() -> GeyserSession.this.sendDownstreamPacket(new ServerboundFinishConfigurationPacket()));
-                        return;
-                    }
-                }
-                super.packetReceived(session, packet);
-            }
-        });
 
         downstream.addListener(new SessionAdapter() {
             @Override
@@ -1812,8 +1793,8 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
             return;
         }
 
-        if (protocol.getState() != intendedState) {
-            geyser.getLogger().debug("Tried to send " + packet.getClass().getSimpleName() + " packet while not in " + intendedState.name() + " state");
+        if (protocol.getOutboundState() != intendedState) {
+            geyser.getLogger().debug("Tried to send " + packet.getClass().getSimpleName() + " packet while not in " + intendedState.name() + " outbound state");
             return;
         }
 
@@ -1847,7 +1828,7 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
     }
 
     private void sendDownstreamPacket0(Packet packet) {
-        ProtocolState state = protocol.getState();
+        ProtocolState state = protocol.getOutboundState();
         if (state == ProtocolState.GAME || state == ProtocolState.CONFIGURATION || packet.getClass() == ServerboundCustomQueryAnswerPacket.class) {
             downstream.sendPacket(packet);
         } else {
@@ -2270,6 +2251,11 @@ public class GeyserSession implements GeyserConnection, GeyserCommandSource {
     public int ping() {
         RakSessionCodec rakSessionCodec = ((RakChildChannel) getUpstream().getSession().getPeer().getChannel()).rakPipeline().get(RakSessionCodec.class);
         return (int) Math.floor(rakSessionCodec.getPing());
+    }
+
+    @Override
+    public int protocolVersion() {
+        return upstream.getProtocolVersion();
     }
 
     @Override
